@@ -276,3 +276,32 @@ button {
     flex-direction: column;
   }
 }
+.analysis-box {
+  margin-top: 18px;
+  background: rgba(255, 253, 208, 0.12);
+  border: 1px solid rgba(255, 253, 208, 0.25);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.analysis-box strong {
+  color: var(--soft-alert);
+  display: block;
+  margin-bottom: 10px;
+}
+
+.analysis-box h4 {
+  margin: 16px 0 8px;
+  color: var(--alert);
+}
+
+.analysis-box ul {
+  padding-left: 18px;
+  margin: 0;
+}
+
+.analysis-box li {
+  margin-bottom: 8px;
+  line-height: 1.4;
+  color: rgba(255, 253, 208, 0.82);
+}

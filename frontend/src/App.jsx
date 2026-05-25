@@ -96,41 +96,105 @@ function IncidentTimeline({ timeline }) {
   );
 }
 
-function AgentAnalysisPanel({ incident }) {
-  const scenario = incident?.active_scenario;
-
-  let message = "Trigger a scenario to let CrisisPilot observe a failure.";
-
-  if (scenario === "latency_crisis") {
-    message =
-      "Recommendation latency increased sharply. Future Gemini agent will identify slow endpoint and suggest cached fallback.";
-  }
-
-  if (scenario === "token_spike") {
-    message =
-      "Estimated token usage spiked. Future Gemini agent will recommend context compression and prompt trimming.";
-  }
-
-  if (scenario === "tool_failure") {
-    message =
-      "Search tool failed. Future Gemini agent will recommend retry limits and graceful fallback.";
-  }
+function AgentAnalysisPanel({ incident, analysis, onAnalyze, analyzing }) {
+  const geminiAnalysis = analysis?.analysis;
+  const error = analysis?.error;
 
   return (
     <section className="panel agent-panel">
-      <p className="eyebrow">Agent Preview</p>
+      <p className="eyebrow">Agent Analysis</p>
       <h2>What CrisisPilot sees</h2>
-      <p>{message}</p>
+
+      {!incident && (
+        <p>Trigger a scenario to let CrisisPilot observe a failure.</p>
+      )}
+
+      {incident && !geminiAnalysis && !error && (
+        <p>
+          Telemetry has been captured for{" "}
+          <strong>{incident.active_scenario}</strong>. Run agent analysis to
+          diagnose the incident.
+        </p>
+      )}
+
+      {error && (
+        <div className="analysis-box">
+          <strong>Analysis failed</strong>
+          <p>{error}</p>
+          <small>{analysis?.details}</small>
+        </div>
+      )}
+
+      {geminiAnalysis && (
+        <div className="analysis-box">
+          <strong>{geminiAnalysis.severity} Severity</strong>
+          <p>{geminiAnalysis.root_cause}</p>
+
+          <h4>Evidence</h4>
+          <ul>
+            {geminiAnalysis.evidence?.map((item, index) => (
+              <li key={index}>{item}</li>
+            ))}
+          </ul>
+
+          <h4>Recovery Plan</h4>
+          <ul>
+            {geminiAnalysis.recommended_actions?.map((item, index) => (
+              <li key={index}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="approval-box">
         <span>Human approval required</span>
-        <button disabled>Approve Recovery</button>
+
+        <button
+          onClick={onAnalyze}
+          disabled={!incident?.incident_id || analyzing}
+        >
+          {analyzing ? "Analyzing..." : "Analyze Incident"}
+        </button>
       </div>
     </section>
   );
 }
 
-export default function App() {
+export default function App() 
+{ const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  const analyzeIncident = async () => {
+  if (!incident?.incident_id) {
+    addTimeline("Analysis blocked", "No incident ID found. Trigger a scenario first.");
+    return;
+  }
+
+  try {
+    setAnalyzing(true);
+
+    addTimeline(
+      "Gemini investigation started",
+      "CrisisPilot is sending telemetry evidence to the incident analysis agent."
+    );
+
+    const response = await axios.post(
+      `${API_BASE}/api/incidents/${incident.incident_id}/analyze`
+    );
+
+    setAnalysis(response.data);
+
+    addTimeline(
+      "Analysis complete",
+      "Gemini returned a structured diagnosis and recovery plan."
+    );
+  } catch (error) {
+    addTimeline("Analysis failed", "Could not analyze the incident.");
+  } finally {
+    setAnalyzing(false);
+  }
+};
+
   const [incident, setIncident] = useState(null);
   const [timeline, setTimeline] = useState([
     {
@@ -241,7 +305,12 @@ export default function App() {
           <IncidentTimeline timeline={timeline} />
         </div>
 
-        <AgentAnalysisPanel incident={incident} />
+        <AgentAnalysisPanel
+          incident={incident}
+          analysis={analysis}
+          onAnalyze={analyzeIncident}
+          analyzing={analyzing}
+        />
       </section>
     </main>
   );

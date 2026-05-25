@@ -6,6 +6,9 @@ from statistics import mean
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import json
+from google import genai
+from google.genai import types
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -21,6 +24,9 @@ SERVICE_NAME = "crisispilot-backend"
 
 DT_OTLP_ENDPOINT = os.getenv("DT_OTLP_ENDPOINT")
 DT_API_TOKEN = os.getenv("DT_API_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 resource = Resource.create({
     "service.name": SERVICE_NAME,
@@ -65,6 +71,66 @@ system_state = {
 }
 
 incident_events = []
+incident_analyses = {}
+
+def build_incident_prompt(telemetry: dict):
+    return f"""
+You are CrisisPilot, an AI incident commander.
+
+You must diagnose the incident using only the provided telemetry evidence.
+Do not invent missing evidence.
+Return JSON only.
+Recommend safe recovery actions that require human approval.
+
+Telemetry evidence:
+{json.dumps(telemetry, indent=2)}
+
+Return JSON with exactly these fields:
+- incident_id
+- severity
+- incident_type
+- root_cause
+- evidence
+- user_impact
+- business_impact
+- recommended_actions
+- human_approval_required
+- confidence
+"""
+
+INCIDENT_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "incident_id": {"type": "string"},
+        "severity": {"type": "string"},
+        "incident_type": {"type": "string"},
+        "root_cause": {"type": "string"},
+        "evidence": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "user_impact": {"type": "string"},
+        "business_impact": {"type": "string"},
+        "recommended_actions": {
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "human_approval_required": {"type": "boolean"},
+        "confidence": {"type": "string"}
+    },
+    "required": [
+        "incident_id",
+        "severity",
+        "incident_type",
+        "root_cause",
+        "evidence",
+        "user_impact",
+        "business_impact",
+        "recommended_actions",
+        "human_approval_required",
+        "confidence"
+    ]
+}
 
 
 def create_incident(scenario_name: str):
@@ -470,3 +536,67 @@ def current_telemetry_summary():
         }
 
     return telemetry_summary(incident_id)
+
+@app.post("/api/incidents/{incident_id}/analyze")
+def analyze_incident(incident_id: str):
+    with tracer.start_as_current_span("crisispilot.gemini_incident_analysis") as span:
+        span.set_attribute("http.endpoint", f"/api/incidents/{incident_id}/analyze")
+        span.set_attribute("incident.id", incident_id)
+        span.set_attribute("tool.name", "gemini-analysis-agent")
+
+        telemetry = telemetry_summary(incident_id)
+
+        if "error" in telemetry:
+            span.set_attribute("error.type", "incident_not_found")
+            return telemetry
+
+        if not gemini_client:
+            span.set_attribute("error.type", "gemini_api_key_missing")
+            return {
+                "error": "Gemini API key missing. Add GEMINI_API_KEY to backend/.env"
+            }
+
+        prompt = build_incident_prompt(telemetry)
+
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=INCIDENT_ANALYSIS_SCHEMA,
+                    temperature=0.2
+                )
+            )
+
+            analysis = json.loads(response.text)
+
+            incident_analyses[incident_id] = {
+                "incident_id": incident_id,
+                "telemetry_summary": telemetry,
+                "analysis": analysis,
+                "status": "analysis_complete",
+                "source": "Gemini structured JSON output"
+            }
+
+            span.set_attribute("scenario.name", telemetry["scenario"])
+            span.set_attribute("analysis.status", "success")
+
+            return incident_analyses[incident_id]
+
+        except Exception as e:
+            span.set_attribute("error.type", "gemini_analysis_failed")
+            return {
+                "error": "Gemini analysis failed",
+                "details": str(e)
+            }
+        
+@app.get("/api/incidents/{incident_id}/analysis")
+def get_incident_analysis(incident_id: str):
+    if incident_id not in incident_analyses:
+                return {
+            "error": "Analysis not found",
+            "incident_id": incident_id
+        }
+
+    return incident_analyses[incident_id]
