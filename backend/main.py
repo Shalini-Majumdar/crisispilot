@@ -1,9 +1,12 @@
 import os
 import time
-import random
+import uuid
+import logging
+from statistics import mean
 from fastapi import FastAPI
-from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -21,7 +24,7 @@ DT_API_TOKEN = os.getenv("DT_API_TOKEN")
 
 resource = Resource.create({
     "service.name": SERVICE_NAME,
-    "service.version": "0.2.0",
+    "service.version": "0.3.0",
     "deployment.environment": "local"
 })
 
@@ -39,6 +42,9 @@ if DT_OTLP_ENDPOINT and DT_API_TOKEN:
 
 tracer = trace.get_tracer(__name__)
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("crisispilot")
+
 app = FastAPI(title="CrisisPilot")
 
 app.add_middleware(
@@ -52,12 +58,92 @@ app.add_middleware(
 FastAPIInstrumentor.instrument_app(app)
 
 
-# Simple in-memory system state.
-# Later we can move this to a database.
 system_state = {
     "mode": "healthy",
-    "active_scenario": None
+    "active_scenario": None,
+    "current_incident_id": None
 }
+
+incident_events = []
+
+
+def create_incident(scenario_name: str):
+    incident_id = str(uuid.uuid4())[:8]
+
+    system_state["mode"] = "failure"
+    system_state["active_scenario"] = scenario_name
+    system_state["current_incident_id"] = incident_id
+
+    incident_events.append({
+        "incident_id": incident_id,
+        "scenario": scenario_name,
+        "event_type": "incident_created",
+        "timestamp": time.time(),
+        "latency_ms": 0,
+        "status": "created",
+        "error_type": None,
+        "tokens_estimated": 0,
+        "tool_failure": False,
+        "endpoint": None
+    })
+
+    logger.info(
+        "Incident created",
+        extra={
+            "incident_id": incident_id,
+            "scenario": scenario_name
+        }
+    )
+
+    return incident_id
+
+
+def record_event(
+    endpoint: str,
+    latency_ms: float,
+    status: str = "success",
+    error_type: str | None = None,
+    tokens_estimated: int = 0,
+    tool_failure: bool = False
+):
+    incident_id = system_state["current_incident_id"]
+
+    event = {
+        "incident_id": incident_id,
+        "scenario": system_state["active_scenario"],
+        "event_type": "telemetry_captured",
+        "timestamp": time.time(),
+        "endpoint": endpoint,
+        "latency_ms": latency_ms,
+        "status": status,
+        "error_type": error_type,
+        "tokens_estimated": tokens_estimated,
+        "tool_failure": tool_failure
+    }
+
+    incident_events.append(event)
+
+    logger.info(f"Telemetry event recorded: {event}")
+
+    return event
+
+
+def get_affected_endpoint(scenario: str | None):
+    if scenario == "latency_crisis":
+        return "/api/recommendations"
+    if scenario == "token_spike":
+        return "/api/gemini-response"
+    if scenario == "tool_failure":
+        return "/api/search-tool"
+    return None
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "CrisisPilot backend is running",
+        "docs": "/docs"
+    }
 
 
 @app.get("/api/health")
@@ -65,76 +151,85 @@ def health():
     with tracer.start_as_current_span("crisispilot.health_check") as span:
         span.set_attribute("http.endpoint", "/api/health")
         span.set_attribute("scenario.name", system_state["active_scenario"] or "none")
+        span.set_attribute("incident.id", system_state["current_incident_id"] or "none")
 
         return {
             "status": "healthy",
             "service": SERVICE_NAME,
             "mode": system_state["mode"],
-            "active_scenario": system_state["active_scenario"]
+            "active_scenario": system_state["active_scenario"],
+            "incident_id": system_state["current_incident_id"]
         }
 
 
 @app.post("/api/scenarios/reset")
 def reset_scenarios():
     with tracer.start_as_current_span("crisispilot.reset_scenarios") as span:
-        system_state["mode"] = "healthy"
-        system_state["active_scenario"] = None
-
         span.set_attribute("scenario.name", "reset")
         span.set_attribute("http.endpoint", "/api/scenarios/reset")
+
+        system_state["mode"] = "healthy"
+        system_state["active_scenario"] = None
+        system_state["current_incident_id"] = None
+
+        logger.info("System reset to healthy mode")
 
         return {
             "message": "System reset to healthy mode",
             "mode": system_state["mode"],
-            "active_scenario": system_state["active_scenario"]
+            "active_scenario": system_state["active_scenario"],
+            "incident_id": system_state["current_incident_id"]
         }
 
 
 @app.post("/api/scenarios/latency")
 def activate_latency_crisis():
-    with tracer.start_as_current_span("crisispilot.activate_latency_crisis") as span:
-        system_state["mode"] = "failure"
-        system_state["active_scenario"] = "latency_crisis"
+    incident_id = create_incident("latency_crisis")
 
+    with tracer.start_as_current_span("crisispilot.latency_crisis") as span:
         span.set_attribute("scenario.name", "latency_crisis")
         span.set_attribute("http.endpoint", "/api/scenarios/latency")
+        span.set_attribute("incident.id", incident_id)
 
         return {
             "message": "Latency crisis activated",
             "mode": system_state["mode"],
-            "active_scenario": system_state["active_scenario"]
+            "active_scenario": system_state["active_scenario"],
+            "incident_id": incident_id
         }
 
 
 @app.post("/api/scenarios/token-spike")
 def activate_token_spike():
-    with tracer.start_as_current_span("crisispilot.activate_token_spike") as span:
-        system_state["mode"] = "failure"
-        system_state["active_scenario"] = "token_spike"
+    incident_id = create_incident("token_spike")
 
+    with tracer.start_as_current_span("crisispilot.token_spike") as span:
         span.set_attribute("scenario.name", "token_spike")
         span.set_attribute("http.endpoint", "/api/scenarios/token-spike")
+        span.set_attribute("incident.id", incident_id)
 
         return {
             "message": "Gemini token spike scenario activated",
             "mode": system_state["mode"],
-            "active_scenario": system_state["active_scenario"]
+            "active_scenario": system_state["active_scenario"],
+            "incident_id": incident_id
         }
 
 
 @app.post("/api/scenarios/tool-failure")
 def activate_tool_failure():
-    with tracer.start_as_current_span("crisispilot.activate_tool_failure") as span:
-        system_state["mode"] = "failure"
-        system_state["active_scenario"] = "tool_failure"
+    incident_id = create_incident("tool_failure")
 
+    with tracer.start_as_current_span("crisispilot.tool_failure") as span:
         span.set_attribute("scenario.name", "tool_failure")
         span.set_attribute("http.endpoint", "/api/scenarios/tool-failure")
+        span.set_attribute("incident.id", incident_id)
 
         return {
             "message": "Tool failure scenario activated",
             "mode": system_state["mode"],
-            "active_scenario": system_state["active_scenario"]
+            "active_scenario": system_state["active_scenario"],
+            "incident_id": incident_id
         }
 
 
@@ -146,25 +241,18 @@ def recommendations():
         span.set_attribute("http.endpoint", "/api/recommendations")
         span.set_attribute("tool.name", "recommendation-engine")
         span.set_attribute("scenario.name", system_state["active_scenario"] or "none")
+        span.set_attribute("incident.id", system_state["current_incident_id"] or "none")
 
         if system_state["active_scenario"] == "latency_crisis":
             time.sleep(5)
             result = {
-                "recommendations": [
-                    "Fallback item A",
-                    "Fallback item B",
-                    "Fallback item C"
-                ],
+                "recommendations": ["Fallback item A", "Fallback item B", "Fallback item C"],
                 "note": "Recommendations returned after artificial latency"
             }
         else:
             time.sleep(0.2)
             result = {
-                "recommendations": [
-                    "Item A",
-                    "Item B",
-                    "Item C"
-                ],
+                "recommendations": ["Item A", "Item B", "Item C"],
                 "note": "Recommendations returned normally"
             }
 
@@ -172,10 +260,16 @@ def recommendations():
 
         span.set_attribute("latency_ms", latency_ms)
 
+        record_event(
+            endpoint="/api/recommendations",
+            latency_ms=latency_ms
+        )
+
         return {
             "endpoint": "/api/recommendations",
             "mode": system_state["mode"],
             "active_scenario": system_state["active_scenario"],
+            "incident_id": system_state["current_incident_id"],
             "latency_ms": latency_ms,
             "data": result
         }
@@ -189,6 +283,7 @@ def gemini_response():
         span.set_attribute("http.endpoint", "/api/gemini-response")
         span.set_attribute("tool.name", "gemini-model")
         span.set_attribute("scenario.name", system_state["active_scenario"] or "none")
+        span.set_attribute("incident.id", system_state["current_incident_id"] or "none")
 
         if system_state["active_scenario"] == "token_spike":
             fake_context = "large_context " * 5000
@@ -214,10 +309,17 @@ def gemini_response():
         span.set_attribute("gemini.tokens_estimated", tokens_estimated)
         span.set_attribute("latency_ms", latency_ms)
 
+        record_event(
+            endpoint="/api/gemini-response",
+            latency_ms=latency_ms,
+            tokens_estimated=tokens_estimated
+        )
+
         return {
             "endpoint": "/api/gemini-response",
             "mode": system_state["mode"],
             "active_scenario": system_state["active_scenario"],
+            "incident_id": system_state["current_incident_id"],
             "gemini_tokens_estimated": tokens_estimated,
             "latency_ms": latency_ms,
             "data": response
@@ -232,19 +334,32 @@ def search_tool():
         span.set_attribute("http.endpoint", "/api/search-tool")
         span.set_attribute("tool.name", "mock-search-tool")
         span.set_attribute("scenario.name", system_state["active_scenario"] or "none")
+        span.set_attribute("incident.id", system_state["current_incident_id"] or "none")
 
         if system_state["active_scenario"] == "tool_failure":
             time.sleep(0.5)
+            latency_ms = round((time.time() - start) * 1000, 2)
 
             span.set_attribute("error.type", "mock_search_tool_500")
-            span.set_attribute("latency_ms", round((time.time() - start) * 1000, 2))
+            span.set_attribute("latency_ms", latency_ms)
+            span.set_attribute("tool.failure", True)
+
+            record_event(
+                endpoint="/api/search-tool",
+                latency_ms=latency_ms,
+                status="failed",
+                error_type="mock_search_tool_500",
+                tool_failure=True
+            )
 
             return {
                 "endpoint": "/api/search-tool",
                 "mode": system_state["mode"],
                 "active_scenario": system_state["active_scenario"],
+                "incident_id": system_state["current_incident_id"],
                 "status": "failed",
                 "error_type": "mock_search_tool_500",
+                "latency_ms": latency_ms,
                 "message": "Search tool failed with simulated 500 error"
             }
 
@@ -252,16 +367,106 @@ def search_tool():
         latency_ms = round((time.time() - start) * 1000, 2)
 
         span.set_attribute("latency_ms", latency_ms)
+        span.set_attribute("tool.failure", False)
+
+        record_event(
+            endpoint="/api/search-tool",
+            latency_ms=latency_ms
+        )
 
         return {
             "endpoint": "/api/search-tool",
             "mode": system_state["mode"],
             "active_scenario": system_state["active_scenario"],
+            "incident_id": system_state["current_incident_id"],
             "status": "success",
             "latency_ms": latency_ms,
-            "results": [
-                "Result 1",
-                "Result 2",
-                "Result 3"
-            ]
+            "results": ["Result 1", "Result 2", "Result 3"]
         }
+
+
+@app.get("/api/incidents")
+def list_incidents():
+    incident_ids = sorted(
+        list(set(event["incident_id"] for event in incident_events if event["incident_id"]))
+    )
+
+    return {
+        "count": len(incident_ids),
+        "incident_ids": incident_ids,
+        "events": incident_events
+    }
+
+
+@app.get("/api/incidents/{incident_id}/telemetry-summary")
+def telemetry_summary(incident_id: str):
+    events = [
+        event for event in incident_events
+        if event["incident_id"] == incident_id
+    ]
+
+    if not events:
+        return {
+            "error": "Incident not found",
+            "incident_id": incident_id
+        }
+
+    scenario = events[0]["scenario"]
+    affected_endpoint = get_affected_endpoint(scenario)
+
+    telemetry_events = [
+        event for event in events
+        if event["event_type"] == "telemetry_captured"
+    ]
+
+    latencies = [
+        event["latency_ms"]
+        for event in telemetry_events
+        if event["latency_ms"] is not None
+    ]
+
+    failed_events = [
+        event for event in telemetry_events
+        if event["status"] == "failed"
+    ]
+
+    tool_failures = [
+        event for event in telemetry_events
+        if event["tool_failure"]
+    ]
+
+    estimated_tokens = sum(
+        event["tokens_estimated"]
+        for event in telemetry_events
+    )
+
+    avg_latency_ms = round(mean(latencies), 2) if latencies else 0
+    p95_latency_ms = round(max(latencies), 2) if latencies else 0
+    error_rate = round(len(failed_events) / len(telemetry_events), 2) if telemetry_events else 0
+
+    return {
+        "incident_id": incident_id,
+        "scenario": scenario,
+        "affected_endpoint": affected_endpoint,
+        "avg_latency_ms": avg_latency_ms,
+        "p95_latency_ms": p95_latency_ms,
+        "error_rate": error_rate,
+        "tool_failures": len(tool_failures),
+        "estimated_tokens": estimated_tokens,
+        "events_count": len(telemetry_events),
+        "evidence_source": "OpenTelemetry traces captured by CrisisPilot and exported to Dynatrace"
+    }
+
+
+@app.get("/api/current-telemetry-summary")
+def current_telemetry_summary():
+    incident_id = system_state["current_incident_id"]
+
+    if not incident_id:
+        return {
+            "message": "No active incident",
+            "mode": system_state["mode"],
+            "active_scenario": system_state["active_scenario"]
+        }
+
+    return telemetry_summary(incident_id)
