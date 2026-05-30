@@ -380,9 +380,11 @@ const confirmDecision = async () => {
   const triggerScenario = async (scenario) => {
   try {
     setLoading(true);
+    setTimeline([]);
     setAnalysis(null);
     setDecision(null);
     setDecisionLocked(false);
+    setPendingDecision(null);
 
     addTimeline("Scenario armed", `${scenario.title} has been triggered.`);
 
@@ -454,47 +456,49 @@ const confirmDecision = async () => {
         </div>
       </section>
 
-      <section className="dashboard-layout">
-        <aside className="panel scenario-panel">
-          <p className="eyebrow">Failure Lab</p>
-          <h2>Choose a crisis</h2>
+<section className="dashboard-layout">
+  <div className="top-grid">
+    <aside className="panel scenario-panel">
+      <p className="eyebrow">Failure Lab</p>
+      <h2>Choose a crisis</h2>
 
-          <div className="scenario-list">
-            {scenarios.map((scenario) => (
-              <ScenarioCard
-                key={scenario.id}
-                scenario={scenario}
-                onTrigger={triggerScenario}
-                loading={loading}
-              />
-            ))}
-          </div>
+      <div className="scenario-list">
+        {scenarios.map((scenario) => (
+          <ScenarioCard
+            key={scenario.id}
+            scenario={scenario}
+            onTrigger={triggerScenario}
+            loading={loading}
+          />
+        ))}
+      </div>
 
-          <button className="reset-button" onClick={resetSystem} disabled={loading}>
-            Reset System
-          </button>
-        </aside>
+      <button className="reset-button" onClick={resetSystem} disabled={loading}>
+        Reset System
+      </button>
+    </aside>
 
-        <div className="main-column">
-          <TelemetryCards incident={incident} />
-          <IncidentTimeline timeline={timeline} />
-        </div>
+    <div className="operations-panel">
+      <TelemetryCards incident={incident} />
+      <IncidentTimeline timeline={timeline} />
+    </div>
+  </div>
 
-        <AgentAnalysisPanel
-          incident={incident}
-          analysis={analysis}
-          decision={decision}
-          decisionLocked={decisionLocked}
-          pendingDecision={pendingDecision}
-          onAnalyze={analyzeIncident}
-          onApprove={approvePlan}
-          onReject={rejectPlan}
-          onSaferPlan={generateSaferPlan}
-          onConfirmDecision={confirmDecision}
-          onCancelDecision={() => setPendingDecision(null)}
-          analyzing={analyzing}
-        />
-      </section>
+  <AgentAnalysisPanel
+    incident={incident}
+    analysis={analysis}
+    decision={decision}
+    decisionLocked={decisionLocked}
+    pendingDecision={pendingDecision}
+    onAnalyze={analyzeIncident}
+    onApprove={approvePlan}
+    onReject={rejectPlan}
+    onSaferPlan={generateSaferPlan}
+    onConfirmDecision={confirmDecision}
+    onCancelDecision={() => setPendingDecision(null)}
+    analyzing={analyzing}
+  />
+</section>
     </main>
   );
 }
