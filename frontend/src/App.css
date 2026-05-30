@@ -305,3 +305,84 @@ button {
   line-height: 1.4;
   color: rgba(255, 253, 208, 0.82);
 }
+.decision-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.decision-actions button {
+  border: none;
+  border-radius: 14px;
+  padding: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.decision-actions button:nth-child(1) {
+  background: var(--alert);
+  color: var(--brown-dark);
+}
+
+.decision-actions button:nth-child(2) {
+  background: transparent;
+  color: var(--cream);
+  border: 1px solid rgba(255, 253, 208, 0.4);
+}
+
+.decision-actions button:nth-child(3) {
+  background: var(--soft-alert);
+  color: var(--brown-dark);
+}
+
+.decision-box {
+  margin-top: 16px;
+  background: rgba(255, 253, 208, 0.14);
+  border: 1px solid rgba(255, 253, 208, 0.28);
+  border-radius: 16px;
+  padding: 14px;
+}
+.confirm-box {
+  margin-top: 16px;
+  background: rgba(255, 193, 7, 0.14);
+  border: 1px solid rgba(255, 193, 7, 0.45);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.confirm-box strong {
+  color: var(--soft-alert);
+  display: block;
+  margin-bottom: 8px;
+}
+
+.confirm-box p {
+  margin: 0 0 14px;
+  color: rgba(255, 253, 208, 0.85);
+  line-height: 1.45;
+}
+
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.confirm-actions button {
+  border: none;
+  border-radius: 12px;
+  padding: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.confirm-actions button:first-child {
+  background: var(--alert);
+  color: var(--brown-dark);
+}
+
+.confirm-actions button:last-child {
+  background: transparent;
+  color: var(--cream);
+  border: 1px solid rgba(255, 253, 208, 0.4);
+}

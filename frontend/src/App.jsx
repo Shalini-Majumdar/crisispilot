@@ -96,7 +96,20 @@ function IncidentTimeline({ timeline }) {
   );
 }
 
-function AgentAnalysisPanel({ incident, analysis, onAnalyze, analyzing }) {
+function AgentAnalysisPanel({
+  incident,
+  analysis,
+  decision,
+  decisionLocked,
+  pendingDecision,
+  onAnalyze,
+  onApprove,
+  onReject,
+  onSaferPlan,
+  onConfirmDecision,
+  onCancelDecision,
+  analyzing,
+}) {
   const geminiAnalysis = analysis?.analysis;
   const error = analysis?.error;
 
@@ -143,6 +156,66 @@ function AgentAnalysisPanel({ incident, analysis, onAnalyze, analyzing }) {
               <li key={index}>{item}</li>
             ))}
           </ul>
+
+          <div className="decision-actions">
+            <button onClick={onApprove} disabled={decisionLocked}>
+              Approve Recovery Plan
+            </button>
+
+            <button onClick={onReject} disabled={decisionLocked}>
+              Reject Plan
+            </button>
+
+            <button onClick={onSaferPlan} disabled={decisionLocked}>
+              Generate Safer Plan
+            </button>
+          </div>
+
+          {pendingDecision && (
+            <div className="confirm-box">
+              <strong>{pendingDecision.title}</strong>
+              <p>{pendingDecision.message}</p>
+
+              <div className="confirm-actions">
+                <button onClick={onConfirmDecision}>Confirm</button>
+                <button onClick={onCancelDecision}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {decision && (
+            <div className="decision-box">
+              <strong>
+                {decision.message || "Decision recorded by human reviewer."}
+              </strong>
+
+              <p>
+                Status: {decision.status || decision.decision || "pending"}
+              </p>
+
+              {decision.approved_actions && (
+                <>
+                  <h4>Approved Actions</h4>
+                  <ul>
+                    {decision.approved_actions.map((action, index) => (
+                      <li key={index}>{action}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              {decision.safer_actions && (
+                <>
+                  <h4>Safer Recovery Plan</h4>
+                  <ul>
+                    {decision.safer_actions.map((action, index) => (
+                      <li key={index}>{action}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -151,7 +224,7 @@ function AgentAnalysisPanel({ incident, analysis, onAnalyze, analyzing }) {
 
         <button
           onClick={onAnalyze}
-          disabled={!incident?.incident_id || analyzing}
+          disabled={!incident?.incident_id || analyzing || decisionLocked}
         >
           {analyzing ? "Analyzing..." : "Analyze Incident"}
         </button>
@@ -163,6 +236,102 @@ function AgentAnalysisPanel({ incident, analysis, onAnalyze, analyzing }) {
 export default function App() 
 { const [analysis, setAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [decision, setDecision] = useState(null);
+  const [decisionLocked, setDecisionLocked] = useState(false);
+  const [pendingDecision, setPendingDecision] = useState(null);
+
+ const approvePlan = () => {
+  if (!incident?.incident_id || decisionLocked) return;
+
+  setPendingDecision({
+    type: "approve",
+    title: "Approve recovery plan?",
+    message:
+      "This will accept Gemini's recovery plan and lock all other decision options.",
+  });
+};
+
+const rejectPlan = () => {
+  if (!incident?.incident_id || decisionLocked) return;
+
+  setPendingDecision({
+    type: "reject",
+    title: "Reject recovery plan?",
+    message:
+      "This will reject Gemini's proposed recovery plan and lock all other decision options.",
+  });
+};
+
+const generateSaferPlan = () => {
+  if (!incident?.incident_id || decisionLocked) return;
+
+  setPendingDecision({
+    type: "safer",
+    title: "Generate safer plan?",
+    message:
+      "This will request a lower-risk recovery plan and lock all other decision options.",
+  });
+};
+
+const confirmDecision = async () => {
+  if (!pendingDecision || !incident?.incident_id) return;
+
+  let endpoint = "";
+
+  if (pendingDecision.type === "approve") {
+    endpoint = "approve";
+  }
+
+  if (pendingDecision.type === "reject") {
+    endpoint = "reject";
+  }
+
+  if (pendingDecision.type === "safer") {
+    endpoint = "safer-plan";
+  }
+
+  try {
+    const response = await axios.post(
+      `${API_BASE}/api/incidents/${incident.incident_id}/${endpoint}`
+    );
+
+    const finalDecision = response.data.existing_decision || response.data;
+
+    setDecision(finalDecision);
+    setDecisionLocked(true);
+    setPendingDecision(null);
+
+    if (pendingDecision.type === "approve") {
+      addTimeline(
+        "Recovery approved",
+        "Human reviewer accepted the recovery plan. Other decision options are now locked."
+      );
+
+      setIncident({
+        ...incident,
+        mode: "healthy",
+        active_scenario: null,
+      });
+    }
+
+    if (pendingDecision.type === "reject") {
+      addTimeline(
+        "Recovery rejected",
+        "Human reviewer rejected the proposed plan. Other decision options are now locked."
+      );
+    }
+
+    if (pendingDecision.type === "safer") {
+      addTimeline(
+        "Safer plan generated",
+        "Human reviewer requested a lower-risk recovery plan. Other decision options are now locked."
+      );
+    }
+  } catch (error) {
+    addTimeline("Decision failed", "Could not record the human decision.");
+    setPendingDecision(null);
+  }
+};
 
   const analyzeIncident = async () => {
   if (!incident?.incident_id) {
@@ -209,57 +378,63 @@ export default function App()
   };
 
   const triggerScenario = async (scenario) => {
-    try {
-      setLoading(true);
+  try {
+    setLoading(true);
+    setAnalysis(null);
+    setDecision(null);
+    setDecisionLocked(false);
 
-      addTimeline("Scenario armed", `${scenario.title} has been triggered.`);
+    addTimeline("Scenario armed", `${scenario.title} has been triggered.`);
 
-      await axios.post(`${API_BASE}${scenario.endpoint}`);
+    await axios.post(`${API_BASE}${scenario.endpoint}`);
 
-      addTimeline(
-        "Failure injected",
-        "The demo AI app is now running in broken mode."
-      );
+    addTimeline(
+      "Failure injected",
+      "The demo AI app is now running in broken mode."
+    );
 
-      const response = await axios.post(`${API_BASE}${scenario.testEndpoint}`);
+    const response = await axios.post(`${API_BASE}${scenario.testEndpoint}`);
 
-      setIncident(response.data);
+    setIncident(response.data);
 
-      addTimeline(
-        "Telemetry captured",
-        `${scenario.testEndpoint} returned measurable failure evidence.`
-      );
+    addTimeline(
+      "Telemetry captured",
+      `${scenario.testEndpoint} returned measurable failure evidence.`
+    );
 
-      addTimeline(
-        "Ready for analysis",
-        "Dynatrace can now display this trace for agent investigation."
-      );
-    } catch (error) {
-      addTimeline("Frontend error", "Could not reach the backend API.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    addTimeline(
+      "Ready for analysis",
+      "Dynatrace can now display this trace for agent investigation."
+    );
+  } catch (error) {
+    addTimeline("Frontend error", "Could not reach the backend API.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const resetSystem = async () => {
-    try {
-      setLoading(true);
+  try {
+    setLoading(true);
 
-      const response = await axios.post(`${API_BASE}/api/scenarios/reset`);
-      setIncident(response.data);
+    const response = await axios.post(`${API_BASE}/api/scenarios/reset`);
+    setIncident(response.data);
+    setAnalysis(null);
+    setDecision(null);
+    setDecisionLocked(false);
 
-      setTimeline([
-        {
-          title: "System reset",
-          description: "All failure scenarios cleared. Healthy mode restored.",
-        },
-      ]);
-    } catch (error) {
-      addTimeline("Reset failed", "Could not reset backend state.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    setTimeline([
+      {
+        title: "System reset",
+        description: "All failure scenarios cleared. Healthy mode restored.",
+      },
+    ]);
+  } catch (error) {
+    addTimeline("Reset failed", "Could not reset backend state.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <main className="app-shell">
@@ -308,7 +483,15 @@ export default function App()
         <AgentAnalysisPanel
           incident={incident}
           analysis={analysis}
+          decision={decision}
+          decisionLocked={decisionLocked}
+          pendingDecision={pendingDecision}
           onAnalyze={analyzeIncident}
+          onApprove={approvePlan}
+          onReject={rejectPlan}
+          onSaferPlan={generateSaferPlan}
+          onConfirmDecision={confirmDecision}
+          onCancelDecision={() => setPendingDecision(null)}
           analyzing={analyzing}
         />
       </section>

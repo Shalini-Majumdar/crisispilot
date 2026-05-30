@@ -72,6 +72,7 @@ system_state = {
 
 incident_events = []
 incident_analyses = {}
+incident_decisions = {}
 
 def build_incident_prompt(telemetry: dict):
     return f"""
@@ -590,13 +591,94 @@ def analyze_incident(incident_id: str):
                 "error": "Gemini analysis failed",
                 "details": str(e)
             }
-        
-@app.get("/api/incidents/{incident_id}/analysis")
-def get_incident_analysis(incident_id: str):
+
+@app.post("/api/incidents/{incident_id}/approve")
+def approve_recovery_plan(incident_id: str):
+    if incident_id in incident_decisions:
+        return {
+            "locked": True,
+            "message": "A human decision has already been recorded for this incident.",
+            "existing_decision": incident_decisions[incident_id]
+        }
+
     if incident_id not in incident_analyses:
-                return {
-            "error": "Analysis not found",
+        return {
+            "error": "Analyze incident before approving recovery plan",
             "incident_id": incident_id
         }
 
-    return incident_analyses[incident_id]
+    incident_decisions[incident_id] = {
+        "incident_id": incident_id,
+        "decision": "approved",
+        "message": "Recovery plan accepted by human reviewer.",
+        "approved_actions": incident_analyses[incident_id]["analysis"]["recommended_actions"],
+        "status": "approved_pending_execution",
+        "locked": True
+    }
+
+    system_state["mode"] = "healthy"
+    system_state["active_scenario"] = None
+    system_state["current_incident_id"] = None
+
+    return incident_decisions[incident_id]
+
+@app.post("/api/incidents/{incident_id}/reject")
+def reject_recovery_plan(incident_id: str):
+    if incident_id in incident_decisions:
+        return {
+            "locked": True,
+            "message": "A human decision has already been recorded for this incident.",
+            "existing_decision": incident_decisions[incident_id]
+        }
+
+    if incident_id not in incident_analyses:
+        return {
+            "error": "Analyze incident before rejecting recovery plan",
+            "incident_id": incident_id
+        }
+
+    incident_decisions[incident_id] = {
+        "incident_id": incident_id,
+        "decision": "rejected",
+        "message": "Recovery plan rejected by human reviewer.",
+        "status": "rejected_needs_revision",
+        "locked": True
+    }
+
+    return incident_decisions[incident_id]
+
+@app.post("/api/incidents/{incident_id}/safer-plan")
+def generate_safer_plan(incident_id: str):
+    if incident_id in incident_decisions:
+        return {
+            "locked": True,
+            "message": "A human decision has already been recorded for this incident.",
+            "existing_decision": incident_decisions[incident_id]
+        }
+
+    if incident_id not in incident_analyses:
+        return {
+            "error": "Analyze incident before generating safer plan",
+            "incident_id": incident_id
+        }
+
+    telemetry = incident_analyses[incident_id]["telemetry_summary"]
+
+    safer_plan = {
+        "incident_id": incident_id,
+        "decision": "safer_plan_requested",
+        "message": "Human reviewer requested a safer recovery plan.",
+        "safer_actions": [
+            "Do not auto-deploy code changes.",
+            "Keep the affected feature in fallback mode.",
+            "Ask a human engineer to review Dynatrace traces.",
+            "Apply temporary mitigation before permanent fix.",
+            "Validate recovery in staging before production rollout."
+        ],
+        "status": "safer_plan_generated_awaiting_execution_review",
+        "based_on": telemetry,
+        "locked": True
+    }
+
+    incident_decisions[incident_id] = safer_plan
+    return safer_plan
